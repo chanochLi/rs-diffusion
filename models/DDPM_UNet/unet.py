@@ -302,7 +302,7 @@ class UNet(nn.Module):
         ])
         
         # 上采样层
-        self.ups = []
+        self.ups = nn.ModuleList()
         for i, mult in list(enumerate(channel_mults))[::-1]:
             out_channels = base_channels * mult
             

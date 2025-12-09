@@ -13,7 +13,7 @@ def test_unet_once(
     num_classes=None,
     attention_resolutions=(1,),
     batch_size=4,
-    device="cpu",
+    device="mps",
 ):
     """
     对 UNet 做一次前向测试，检查形状是否正确。
@@ -66,7 +66,7 @@ def test_unet_once(
 
 def main():
     # 选择设备
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = 'cuda' if torch.cuda.is_available() else "mps" if torch.mps.is_available else "cpu"
     print("Using device:", device)
 
     # 1) 最基础：无时间、无类别条件（如果你 time_emb_dim=None 时允许）
