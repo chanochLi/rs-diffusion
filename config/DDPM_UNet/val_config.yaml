@@ -1,0 +1,47 @@
+# Validation configuration for DDPM_UNet
+
+# Device configuration
+device: auto  # Options: auto, cuda, mps, cpu
+
+# Model configuration
+model:
+  type: DDPM_UNet
+  params:
+    img_channels: 3
+    base_channels: 64
+    channel_mults: [1, 2, 4, 8]
+    num_res_blocks: 2
+    time_emb_dim: 256
+    num_classes: null  # Set to number of classes for conditional generation, null for unconditional
+    dropout: 0.1
+    attn_resolutions: [1]
+    num_groups: 32
+    init_pad: 0
+
+# Engine configuration
+engine:
+  type: DDPM_UNet
+  params:
+    num_timesteps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: linear
+
+# Data configuration
+data:
+  val:
+    path: ./data/val  # Path to validation data
+    batch_size: 16
+    shuffle: false
+    num_workers: 4
+    pin_memory: true
+    has_labels: false
+
+# Process configuration
+process:
+  val:
+    checkpoint_path: ./checkpoints/checkpoint_epoch_100.pt  # Path to checkpoint to load
+    save_samples: true
+    save_dir: ./val_results
+    num_samples_to_save: 10
+    metrics: []  # List of metric functions (currently not implemented)

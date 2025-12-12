@@ -41,5 +41,43 @@ A simple project for `text-to-image remote sensing image generation`.
    .venv\Scripts\activate
    ```
 
-## Examples Usage
+## Usage
 
+### Quick Start
+
+The framework uses a unified `main.py` script with YAML configuration files.
+
+#### Training
+
+```bash
+python main.py --config config/{model}/train_config.yaml --mode train
+```
+
+#### Validation
+
+```bash
+python main.py --config config/{model}/val_config.yaml --mode val
+```
+
+#### Inference
+
+```bash
+python main.py --config config/{model}/inference_config.yaml --mode inference
+```
+
+### Configuration Files
+
+Configuration files are located in the `config/` directory. See `config/README.md` for detailed documentation.
+
+Key configuration sections:
+- **Model**: Model architecture parameters
+- **Engine**: Model-specific engine parameters (e.g., diffusion timesteps)
+- **Data**: Data loader configuration
+- **Process**: Process-specific parameters (training, validation, inference)
+
+### Custom Dataset
+
+The `ImageDataset` class in `main.py` is a placeholder. Replace it with your actual dataset implementation that:
+- Loads images from your data source
+- Optionally loads labels for conditional generation
+- Returns dictionaries with `'images'` key (and optionally `'labels'` key)
