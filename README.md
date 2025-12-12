@@ -8,7 +8,6 @@ A simple project for `text-to-image remote sensing image generation`.
 
 ## Todo List
 
-
 ##  Environment configuration
 
 ### Prerequisites
@@ -75,9 +74,68 @@ Key configuration sections:
 - **Data**: Data loader configuration
 - **Process**: Process-specific parameters (training, validation, inference)
 
+### Distributed Training (Multi-GPU and Multi-Node)
+
+#### Single Node Multi-GPU
+
+Using `torchrun` (recommended):
+```bash
+torchrun --nproc_per_node=4 main.py --config config/DDPM_UNet/train_config.yaml --mode train
+```
+
+Or using the provided script:
+```bash
+./scripts/launch_distributed.sh config/DDPM_UNet/train_config.yaml train 4
+```
+
+#### Multi-Node Training
+
+Using `torchrun`:
+```bash
+# On node 0
+torchrun --nnodes=2 --node_rank=0 --nproc_per_node=4 --master_addr="<node0_ip>" --master_port=29500 main.py --config config/DDPM_UNet/train_config.yaml --mode train
+
+# On node 1
+torchrun --nnodes=2 --node_rank=1 --nproc_per_node=4 --master_addr="<node0_ip>" --master_port=29500 main.py --config config/DDPM_UNet/train_config.yaml --mode train
+```
+
+#### SLURM Cluster
+
+For SLURM clusters, use the provided script:
+```bash
+sbatch scripts/launch_distributed_slurm.sh
+```
+
+#### Configuration
+
+Distributed training is automatically detected via environment variables (`RANK`, `WORLD_SIZE`, `LOCAL_RANK`). The framework will:
+- Automatically wrap the model with DDP
+- Use `DistributedSampler` for data loading
+- Only save checkpoints and log to TensorBoard on rank 0
+- Synchronize losses across all processes
+
+You can configure distributed training options in the config file:
+```yaml
+distributed:
+  enabled: false  # Set to true to enable (or use environment variables)
+  find_unused_parameters: false  # Set to true if model has unused parameters
+```
+
+**Note**: The effective batch size is `batch_size * num_gpus * num_nodes`. Adjust your learning rate accordingly.
+
 ### Custom Dataset
 
-The `ImageDataset` class in `main.py` is a placeholder. Replace it with your actual dataset implementation that:
-- Loads images from your data source
-- Optionally loads labels for conditional generation
-- Returns dictionaries with `'images'` key (and optionally `'labels'` key)
+The framework uses `torchvision.datasets.ImageFolder` for ImageNet-like directory structures. Your dataset should be organized as:
+```
+data/
+  train/
+    class1/
+      img1.jpg
+      img2.jpg
+    class2/
+      img3.jpg
+      ...
+  val/
+    class1/
+      ...
+```

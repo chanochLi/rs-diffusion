@@ -11,12 +11,17 @@ from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from pathlib import Path
 import sys
+import os
 
 from models import UNet
 from engine.DDPM_UNet import DDPM_UNetEngine
 from tools.train import TrainProcess
 from tools.val import ValProcess
 from tools.inference import InferenceProcess
+from tools.distributed import (
+    init_distributed, cleanup_distributed, wrap_model,
+    is_main_process, get_rank, get_world_size
+)
 
 
 def collate_fn(batch):
@@ -103,6 +108,8 @@ def create_data_loaders(config: dict) -> tuple[DataLoader | None, DataLoader | N
     Returns:
         Tuple of (train_loader, val_loader)
     """
+    from tools.distributed import get_distributed_sampler
+    
     data_config = config.get('data', {})
     
     # Create transforms
@@ -121,10 +128,21 @@ def create_data_loaders(config: dict) -> tuple[DataLoader | None, DataLoader | N
             root=train_config.get('path', './data/train'),
             transform=transform
         )
+        
+        # Use DistributedSampler if distributed training is enabled
+        train_sampler = get_distributed_sampler(
+            train_dataset,
+            shuffle=train_config.get('shuffle', True)
+        )
+        
+        # Shuffle should be False when using DistributedSampler
+        shuffle = train_config.get('shuffle', True) if train_sampler is None else False
+        
         train_loader = DataLoader(
             train_dataset,
             batch_size=train_config.get('batch_size', 16),
-            shuffle=train_config.get('shuffle', True),
+            shuffle=shuffle,
+            sampler=train_sampler,
             num_workers=train_config.get('num_workers', 4),
             collate_fn=collate_fn,
             pin_memory=train_config.get('pin_memory', True)
@@ -137,10 +155,18 @@ def create_data_loaders(config: dict) -> tuple[DataLoader | None, DataLoader | N
             root=val_config.get('path', './data/val'),
             transform=transform
         )
+        
+        # Use DistributedSampler for validation too
+        val_sampler = get_distributed_sampler(
+            val_dataset,
+            shuffle=False
+        )
+        
         val_loader = DataLoader(
             val_dataset,
             batch_size=val_config.get('batch_size', 16),
-            shuffle=val_config.get('shuffle', False),
+            shuffle=False,
+            sampler=val_sampler,
             num_workers=val_config.get('num_workers', 4),
             collate_fn=collate_fn,
             pin_memory=val_config.get('pin_memory', True)
@@ -149,16 +175,23 @@ def create_data_loaders(config: dict) -> tuple[DataLoader | None, DataLoader | N
     return train_loader, val_loader
 
 
-def get_device(config: dict) -> torch.device:
+def get_device(config: dict, distributed: bool = False) -> torch.device:
     """
     Get device from config.
     
     Args:
         config: General configuration
+        distributed: Whether distributed training is enabled
         
     Returns:
         torch.device
     """
+    # In distributed training, use local rank
+    if distributed and 'LOCAL_RANK' in os.environ:
+        local_rank = int(os.environ['LOCAL_RANK'])
+        if torch.cuda.is_available():
+            return torch.device(f'cuda:{local_rank}')
+    
     device_name = config.get('device', 'auto')
     
     if device_name == 'auto':
@@ -198,27 +231,46 @@ def main():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
+    # Initialize distributed training if enabled
+    rank, world_size, distributed = init_distributed()
+    
+    if distributed:
+        if is_main_process():
+            print(f"Initialized distributed training: world_size={world_size}, rank={rank}")
+    else:
+        print("Running in single-process mode")
+    
     # Get device
-    device = get_device(config)
-    print(f"Using device: {device}")
+    device = get_device(config, distributed=distributed)
+    if is_main_process():
+        print(f"Using device: {device}")
     
     # Create model
-    print("Creating model...")
+    if is_main_process():
+        print("Creating model...")
     model = create_model(config.get('model', {}))
-    print(f"Model created: {config.get('model', {}).get('type', 'DDPM_UNet')}")
+    if is_main_process():
+        print(f"Model created: {config.get('model', {}).get('type', 'DDPM_UNet')}")
+    
+    # Wrap model with DDP if distributed
+    model = wrap_model(model, device, find_unused_parameters=config.get('distributed', {}).get('find_unused_parameters', False))
     
     # Create engine
-    print("Creating engine...")
+    if is_main_process():
+        print("Creating engine...")
     engine = create_engine(config.get('engine', {}), model, device)
-    print(f"Engine created: {config.get('engine', {}).get('type', 'DDPM_UNet')}")
+    if is_main_process():
+        print(f"Engine created: {config.get('engine', {}).get('type', 'DDPM_UNet')}")
     
     # Run based on mode
     if args.mode == 'train':
-        print("\n=== Starting Training ===")
+        if is_main_process():
+            print("\n=== Starting Training ===")
         train_loader, val_loader = create_data_loaders(config)
         
         if train_loader is None:
-            print("Error: Training data loader not found in config")
+            if is_main_process():
+                print("Error: Training data loader not found in config")
             sys.exit(1)
         
         train_config = config.get('process', {}).get('train', {})
@@ -232,6 +284,7 @@ def main():
             gradient_clip=train_config.get('gradient_clip', None),
             resume_from=train_config.get('resume_from', None),
             tensorboard_dir=train_config.get('tensorboard_dir', None),
+            distributed=distributed,
             # Optimizer and scheduler params
             lr=train_config.get('lr', 1e-4),
             weight_decay=train_config.get('weight_decay', 0.0),

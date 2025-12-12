@@ -2,6 +2,11 @@
 # Device configuration
 device: auto  # Options: auto, cuda, mps, cpu
 
+# Distributed training configuration
+distributed:
+  enabled: false  # Set to true to enable distributed training
+  find_unused_parameters: false  # Set to true if model has unused parameters
+
 # Model configuration
 model:
   type: DDPM_UNet

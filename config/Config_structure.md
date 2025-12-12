@@ -2,21 +2,6 @@
 
 This directory contains YAML configuration files for training, validation, and inference.
 
-## Usage
-
-Run the main script with a config file and mode:
-
-```bash
-# Training
-python main.py --config config/train_config.yaml --mode train
-
-# Validation
-python main.py --config config/val_config.yaml --mode val
-
-# Inference
-python main.py --config config/inference_config.yaml --mode inference
-```
-
 ## Config File Structure
 
 ### General Structure

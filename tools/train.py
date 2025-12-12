@@ -11,6 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Optional
 
 from .base import BaseProcess, BaseEngine
+from .distributed import is_main_process, all_reduce_mean, barrier
 
 
 class TrainProcess(BaseProcess):
@@ -30,6 +31,7 @@ class TrainProcess(BaseProcess):
         gradient_clip: float | None = None,
         resume_from: str | None = None,
         tensorboard_dir: Optional[str] = None,
+        distributed: bool = False,
         **kwargs
     ):
         """
@@ -46,6 +48,7 @@ class TrainProcess(BaseProcess):
             gradient_clip: Optional gradient clipping value
             resume_from: Optional path to checkpoint to resume from
             tensorboard_dir: Optional directory for TensorBoard logs
+            distributed: Whether distributed training is enabled
             **kwargs: Additional arguments passed to optimizer/scheduler
         """
         super().__init__(engine, **kwargs)
@@ -56,10 +59,11 @@ class TrainProcess(BaseProcess):
         self.save_freq = save_freq
         self.log_freq = log_freq
         self.gradient_clip = gradient_clip
+        self.distributed = distributed
         
-        # Initialize TensorBoard writer
+        # Initialize TensorBoard writer (only on main process)
         self.writer = None
-        if tensorboard_dir is not None:
+        if tensorboard_dir is not None and is_main_process():
             os.makedirs(tensorboard_dir, exist_ok=True)
             self.writer = SummaryWriter(log_dir=tensorboard_dir)
             print(f"TensorBoard logging enabled. Logs will be saved to: {tensorboard_dir}")
@@ -77,8 +81,9 @@ class TrainProcess(BaseProcess):
         self.optimizer = engine.get_optimizer(**optimizer_kwargs)
         self.scheduler = engine.get_scheduler(self.optimizer, **scheduler_kwargs)
         
-        # Create save directory
-        os.makedirs(save_dir, exist_ok=True)
+        # Create save directory (only on main process)
+        if is_main_process():
+            os.makedirs(save_dir, exist_ok=True)
         
         # Resume from checkpoint if provided
         self.start_epoch = 0
@@ -88,7 +93,11 @@ class TrainProcess(BaseProcess):
                 optimizer=self.optimizer,
                 scheduler=self.scheduler
             )
-            print(f"Resumed training from epoch {self.start_epoch}")
+            if is_main_process():
+                print(f"Resumed training from epoch {self.start_epoch}")
+            # Synchronize all processes after loading checkpoint
+            if distributed:
+                barrier()
     
     def run(self):
         """
@@ -96,36 +105,47 @@ class TrainProcess(BaseProcess):
         """
         self.engine.model.train()
         
+        # Set epoch for DistributedSampler if using distributed training
+        if self.distributed and hasattr(self.train_loader.sampler, 'set_epoch'):
+            sampler = self.train_loader.sampler
+        
         for epoch in range(self.start_epoch, self.num_epochs):
+            # Set epoch for DistributedSampler
+            if self.distributed and hasattr(self.train_loader.sampler, 'set_epoch'):
+                self.train_loader.sampler.set_epoch(epoch)
+            
             # Training phase
             train_loss = self._train_epoch(epoch)
             
             # Validation phase (if validation loader provided)
             val_loss = None
             if self.val_loader is not None:
+                if self.distributed and hasattr(self.val_loader.sampler, 'set_epoch'):
+                    self.val_loader.sampler.set_epoch(epoch)
                 val_loss = self._validate_epoch()
             
             # Update learning rate
             if self.scheduler is not None:
                 self.scheduler.step()
             
-            # Logging
-            log_msg = f"Epoch [{epoch+1}/{self.num_epochs}] - Train Loss: {train_loss:.4f}"
-            if val_loss is not None:
-                log_msg += f" - Val Loss: {val_loss:.4f}"
-            print(log_msg)
-            
-            # Log to TensorBoard
-            if self.writer is not None:
-                self.writer.add_scalar('Loss/Train', train_loss, epoch + 1)
+            # Logging (only on main process)
+            if is_main_process():
+                log_msg = f"Epoch [{epoch+1}/{self.num_epochs}] - Train Loss: {train_loss:.4f}"
                 if val_loss is not None:
-                    self.writer.add_scalar('Loss/Validation', val_loss, epoch + 1)
-                if self.scheduler is not None:
-                    current_lr = self.scheduler.get_last_lr()[0] if hasattr(self.scheduler, 'get_last_lr') else self.optimizer.param_groups[0]['lr']
-                    self.writer.add_scalar('Learning_Rate', current_lr, epoch + 1)
+                    log_msg += f" - Val Loss: {val_loss:.4f}"
+                print(log_msg)
+                
+                # Log to TensorBoard
+                if self.writer is not None:
+                    self.writer.add_scalar('Loss/Train', train_loss, epoch + 1)
+                    if val_loss is not None:
+                        self.writer.add_scalar('Loss/Validation', val_loss, epoch + 1)
+                    if self.scheduler is not None:
+                        current_lr = self.scheduler.get_last_lr()[0] if hasattr(self.scheduler, 'get_last_lr') else self.optimizer.param_groups[0]['lr']
+                        self.writer.add_scalar('Learning_Rate', current_lr, epoch + 1)
             
-            # Save checkpoint
-            if (epoch + 1) % self.save_freq == 0 or epoch == self.num_epochs - 1:
+            # Save checkpoint (only on main process)
+            if is_main_process() and ((epoch + 1) % self.save_freq == 0 or epoch == self.num_epochs - 1):
                 checkpoint_path = os.path.join(
                     self.save_dir,
                     f"checkpoint_epoch_{epoch+1}.pt"
@@ -137,9 +157,13 @@ class TrainProcess(BaseProcess):
                     scheduler=self.scheduler
                 )
                 print(f"Saved checkpoint to {checkpoint_path}")
+            
+            # Synchronize all processes after each epoch
+            if self.distributed:
+                barrier()
         
-        # Close TensorBoard writer
-        if self.writer is not None:
+        # Close TensorBoard writer (only on main process)
+        if is_main_process() and self.writer is not None:
             self.writer.close()
             print("TensorBoard writer closed.")
     
@@ -156,10 +180,12 @@ class TrainProcess(BaseProcess):
         total_loss = 0.0
         num_batches = 0
         
+        # Only show progress bar on main process
         pbar = tqdm(
             self.train_loader,
             desc=f"Epoch {epoch+1}/{self.num_epochs}",
-            leave=False
+            leave=False,
+            disable=not is_main_process()
         )
         
         for step, batch in enumerate(pbar):
@@ -195,14 +221,22 @@ class TrainProcess(BaseProcess):
                 current_loss = total_loss / num_batches
                 pbar.set_postfix({"loss": f"{current_loss:.4f}"})
                 
-                # Log to TensorBoard
-                if self.writer is not None:
+                # Log to TensorBoard (only on main process)
+                if is_main_process() and self.writer is not None:
                     self.writer.add_scalar('Loss/Train_Step', current_loss, global_step)
                     if self.scheduler is not None:
                         current_lr = self.scheduler.get_last_lr()[0] if hasattr(self.scheduler, 'get_last_lr') else self.optimizer.param_groups[0]['lr']
                         self.writer.add_scalar('Learning_Rate_Step', current_lr, global_step)
         
-        return total_loss / num_batches if num_batches > 0 else 0.0
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        
+        # Reduce loss across all processes in distributed training
+        if self.distributed:
+            avg_loss_tensor = torch.tensor(avg_loss, device=self.engine.device)
+            avg_loss_tensor = all_reduce_mean(avg_loss_tensor)
+            avg_loss = avg_loss_tensor.item()
+        
+        return avg_loss
     
     def _validate_epoch(self) -> float:
         """
@@ -224,7 +258,15 @@ class TrainProcess(BaseProcess):
                 num_batches += 1
         
         self.engine.model.train()
-        return total_loss / num_batches if num_batches > 0 else 0.0
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        
+        # Reduce loss across all processes in distributed training
+        if self.distributed:
+            avg_loss_tensor = torch.tensor(avg_loss, device=self.engine.device)
+            avg_loss_tensor = all_reduce_mean(avg_loss_tensor)
+            avg_loss = avg_loss_tensor.item()
+        
+        return avg_loss
     
     def _move_to_device(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """
