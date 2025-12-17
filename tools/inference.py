@@ -4,6 +4,7 @@ Inference process for image generation models.
 import torch
 import os
 from tqdm import tqdm
+import torchvision
 
 from .base import BaseProcess, BaseEngine
 
@@ -146,7 +147,5 @@ class InferenceProcess(BaseProcess):
             sample: Sample tensor to save
             sample_idx: Index of the sample
         """
-        # This is a placeholder - should be implemented based on specific model needs
-        # For image generation, you might want to save images using torchvision
-        sample_path = os.path.join(self.save_dir, f"sample_{sample_idx:04d}.pt")
-        torch.save(sample.cpu(), sample_path)
+        sample_path = os.path.join(self.save_dir, f"sample_{sample_idx:04d}.jpg")
+        torchvision.utils.save_image(sample, sample_path)

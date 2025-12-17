@@ -117,7 +117,7 @@ class AttentionBlock(nn.Module):
         v = v.permute(0, 2, 3, 1).view(b, h * w, c)
         
         # [b, h*w, c] [b, c, h*w] -> [b, h*w, h*w]
-        attn_score = torch.softmax(q @ k // math.sqrt(c), dim=-1)
+        attn_score = torch.softmax(q @ k / math.sqrt(c), dim=-1)
         
         # [b, h*w, h*w][b, h*w, c] -> [b, c, h, w]
         out = (attn_score @ v).view(b, w, h, c).permute(0, 3, 1, 2)
@@ -183,11 +183,11 @@ class ResBlock(nn.Module):
         
         # [b, t] -> [b, out_c] -> [b, out_c, 1, 1]
         if self.time_bias and time_emb is not None:
-            out += self.time_bias(self.act(time_emb))[:, :, None, None]
+            out += self.time_bias(self.act(time_emb)).unsqueeze(-1).unsqueeze(-1)
 
         # [b, class] -> [b, out_c] -> [b, out_c, 1, 1]
         if self.cls_bias and label is not None:
-            out += self.cls_bias(label)[:, :, None, None]
+            out += self.cls_bias(label).unsqueeze(-1).unsqueeze(-1)
         
         # [b, out_c, h, w]
         out = self.act(self.norm_2(out))
