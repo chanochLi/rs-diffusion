@@ -4,8 +4,8 @@ device: auto  # Options: auto, cuda, mps, cpu
 
 # Distributed training configuration
 distributed:
-  enabled: false  # Set to true to enable distributed training
-  find_unused_parameters: false  # Set to true if model has unused parameters
+  enabled: false
+  find_unused_parameters: false
 
 # Model configuration
 model:
@@ -58,8 +58,11 @@ process:
     log_freq: 100
     gradient_clip: null
     resume_from: null
-    tensorboard_dir: ./results/DDPM_UNet/cifar-100/tensorboard  # Set to null to disable TensorBoard
-    
+    tensorboard_dir: ./results/DDPM_UNet/cifar-100/tensorboard  # null to disable TensorBoard
+    accumulation_steps: 1
+    mixed_precision: null  # null, fp16, bf16
+    ema_decay: null  # null to disable, typically 0.999 or 0.9999
+
     # Optimizer parameters
     lr: 0.0001
     weight_decay: 0.0

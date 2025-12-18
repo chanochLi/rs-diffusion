@@ -1,5 +1,4 @@
 # Inference configuration for DDPM_UNet
-
 # Device configuration
 device: auto  # Options: auto, cuda, mps, cpu
 
@@ -17,6 +16,7 @@ model:
     attn_resolutions: [1]
     num_groups: 32
     init_pad: 0
+    act: relu
 
 # Engine configuration
 engine:

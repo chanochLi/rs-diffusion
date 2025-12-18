@@ -326,6 +326,6 @@ class DDPM_UNetEngine(BaseEngine):
         # Add warmup if needed
         if warmup_epochs > 0:
             warmup_scheduler = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
-            return SequentialLR(optimizer, schedulers=[warmup_scheduler, base_scheduler], milestones=[warmup_epochs])
+            return SequentialLR(optimizer, schedulers=[warmup_scheduler, base_scheduler], milestones=[warmup_epochs])   # type: ignore
         else:
-            return base_scheduler
+            return base_scheduler   # type: ignore

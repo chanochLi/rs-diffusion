@@ -19,8 +19,8 @@ from tools.train import TrainProcess
 from tools.val import ValProcess
 from tools.inference import InferenceProcess
 from tools.distributed import (
-    init_distributed, cleanup_distributed, wrap_model,
-    is_main_process, get_rank, get_world_size
+    init_distributed, wrap_model,
+    is_main_process
 )
 
 
@@ -59,7 +59,7 @@ def create_model(config: dict) -> torch.nn.Module:
             num_res_blocks=model_config.get('num_res_blocks', 2),
             time_emb_dim=model_config.get('time_emb_dim', 256),
             num_classes=model_config.get('num_classes', None),
-            act=F.relu,
+            act=model_config.get('act', 'relu'),
             dropout=model_config.get('dropout', 0.1),
             attn_resolutions=tuple(model_config.get('attn_resolutions', [])),
             num_groups=model_config.get('num_groups', 32),
@@ -285,6 +285,8 @@ def main():
             resume_from=train_config.get('resume_from', None),
             tensorboard_dir=train_config.get('tensorboard_dir', None),
             distributed=distributed,
+            mixed_precision=train_config.get('mixed_precision', None),
+            ema_decay=train_config.get('ema_decay', None),
             # Optimizer and scheduler params
             lr=train_config.get('lr', 1e-4),
             weight_decay=train_config.get('weight_decay', 0.0),
@@ -292,6 +294,7 @@ def main():
             scheduler_type=train_config.get('scheduler_type', 'cosine'),
             num_epochs=train_config.get('num_epochs', 100),
             warmup_epochs=train_config.get('warmup_epochs', 0),
+            accumulation_steps=train_config.get('accumulation_steps', 1),
         )
         train_process.run()
     

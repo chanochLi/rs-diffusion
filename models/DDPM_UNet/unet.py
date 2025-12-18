@@ -4,6 +4,15 @@ from torch import nn
 from torch.nn import functional as F
 
 
+ACT_DICT: dict[str, nn.Module] = {
+    'relu': F.relu,
+    'silu': F.silu,
+    'gelu': F.gelu,
+    'tanh': F.tanh,
+    'sigmoid': F.sigmoid,
+    'leaky_relu': F.leaky_relu,
+}
+
 class TimeEmbedding(nn.Module):
     """
     使用正弦构成的时间t的embedding
@@ -218,7 +227,7 @@ class UNet(nn.Module):
         self,
         img_channels: int,
         base_channels: int, 
-        act = F.relu,
+        act: str= 'relu',
         dropout: float = 0.1,
         num_groups: int = 32,
         attn_resolutions: tuple = (),
@@ -233,7 +242,7 @@ class UNet(nn.Module):
         
         # 如果w或者h不为2的倍数
         self.init_pad = init_pad
-        self.act = act
+        self.act = ACT_DICT[act]
         
         # 时间位置编码
         if time_emb_dim:
