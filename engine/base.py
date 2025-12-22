@@ -164,6 +164,15 @@ class BaseEngine(ABC):
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         
+        # 避免DDP在checkpoint中加入的module.前缀
+        new_state = OrderedDict()
+        for k, v in checkpoint['model_state_dict'].items():
+            if k.startswith("module."):
+                k = k[len("module."):]
+            new_state[k] = v
+        
+        self.model.load_state_dict(new_state)
+        
         if optimizer is not None and 'optimizer_state_dict' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if scheduler is not None and 'scheduler_state_dict' in checkpoint:

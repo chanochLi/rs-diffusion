@@ -4,7 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 
 
-ACT_DICT: dict[str, nn.Module] = {
+ACT_DICT = {
     'relu': F.relu,
     'silu': F.silu,
     'gelu': F.gelu,
@@ -93,15 +93,22 @@ class AttentionBlock(nn.Module):
     Args:
         num_groups (int): 分组norm的组数
         in_channels (int): 输入通道
+        num_heads (int): 注意力头数
     """
     def __init__(
         self, 
         num_groups: int,
-        in_channels: int
+        in_channels: int,
+        num_heads: int = 1
         ) -> None:
         super().__init__()
 
         self.in_channels = in_channels
+        self.num_heads = num_heads
+        
+        # 确保通道数能被头数整除
+        assert in_channels % num_heads == 0, f"in_channels ({in_channels}) must be divisible by num_heads ({num_heads})"
+        self.head_dim = in_channels // num_heads
 
         # 额外增加一个norm层
         self.norm = nn.GroupNorm(num_groups=num_groups, num_channels=in_channels)
@@ -118,18 +125,21 @@ class AttentionBlock(nn.Module):
         # [b, c, h, w]
         q, k, v = torch.split(qkv, self.in_channels, dim=1)
         
-        # [b, h, w, c] -> [b, h*w, c]
-        q = q.permute(0, 2, 3, 1).view(b, h * w, c)
-        # [b, h, w, c] -> [b, c, h*w]
-        k = k.view(b, c, h * w)
-        # [b, h, w, c] -> [b, h*w, c]
-        v = v.permute(0, 2, 3, 1).view(b, h * w, c)
+        # [b, c, h, w] -> [b, h, head_dim, h*w]
+        q = q.view(b, self.num_heads, self.head_dim, h * w).permute(0, 1, 3, 2)
+        k = k.view(b, self.num_heads, self.head_dim, h * w).permute(0, 1, 2, 3)
+        v = v.view(b, self.num_heads, self.head_dim, h * w).permute(0, 1, 3, 2)
+
+        # [b, num_heads, h*w, h*w]
+        attn_score = torch.softmax(q @ k / math.sqrt(self.head_dim), dim=-1)
         
-        # [b, h*w, c] [b, c, h*w] -> [b, h*w, h*w]
-        attn_score = torch.softmax(q @ k / math.sqrt(c), dim=-1)
+        # [b, num_heads, h*w, head_dim]
+        out = attn_score @ v
         
-        # [b, h*w, h*w][b, h*w, c] -> [b, c, h, w]
-        out = (attn_score @ v).view(b, w, h, c).permute(0, 3, 1, 2)
+        # [b, num_heads, head_dim, h*w] -> [b, c, h, w]
+        out = out.permute(0, 1, 3, 2).contiguous().view(b, self.in_channels, h, w)
+        
+        # 输出投影和残差连接
         out = self.out(out) + x
         
         return out
@@ -160,6 +170,7 @@ class ResBlock(nn.Module):
         time_emb_dim: int | None = None,
         num_classes: int | None = None,
         use_attention: bool = False,
+        num_heads: int = 1,
         ) -> None:
         super().__init__()
         
@@ -182,7 +193,7 @@ class ResBlock(nn.Module):
         self.res_connection = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
         
         # attention
-        self.attention = AttentionBlock(num_groups, out_channels) if use_attention else nn.Identity()
+        self.attention = AttentionBlock(num_groups, out_channels, num_heads=num_heads) if use_attention else nn.Identity()
     
     def forward(self, x: torch.Tensor, time_emb: torch.Tensor | None = None, label: torch.Tensor | None = None) -> torch.Tensor:
         # [b, in_c, h, w]
@@ -222,6 +233,7 @@ class UNet(nn.Module):
     time_emb_scale (float): 时间PE的系数
     num_classes (int): 类别数
     init_pad (int): 需要pad的像素数, 主要应对w和h为非偶数情况
+    num_heads (int): 注意力头数, 默认为1
     """
     def __init__(
         self,
@@ -237,6 +249,7 @@ class UNet(nn.Module):
         time_emb_scale: float = 1.0,
         num_classes: int | None = None,
         init_pad: int = 0,
+        num_heads: int = 1,
         ) -> None:
         super().__init__()
         
@@ -274,9 +287,10 @@ class UNet(nn.Module):
                     out_channels,
                     dropout,
                     time_emb_dim=time_emb_dim,
-                    act=act,
+                    act=self.act,
                     num_groups=num_groups,
                     use_attention=i in attn_resolutions,
+                    num_heads=num_heads,
                 ))
                 now_channels = out_channels
                 channels.append(now_channels)
@@ -292,21 +306,23 @@ class UNet(nn.Module):
                 now_channels,
                 now_channels,
                 dropout=dropout,
-                act=act,
+                act=self.act,
                 num_groups=num_groups,
                 num_classes=num_classes,
                 use_attention=True,
-                time_emb_dim=time_emb_dim
+                time_emb_dim=time_emb_dim,
+                num_heads=num_heads,
             ),
             ResBlock(
                 now_channels,
                 now_channels,
                 dropout=dropout,
-                act=act,
+                act=self.act,
                 num_groups=num_groups,
                 num_classes=num_classes,
                 use_attention=False,
-                time_emb_dim=time_emb_dim
+                time_emb_dim=time_emb_dim,
+                num_heads=num_heads,
             )
         ])
         
@@ -321,11 +337,12 @@ class UNet(nn.Module):
                     channels.pop() + now_channels,
                     out_channels,
                     dropout,
-                    act=act,
+                    act=self.act,
                     num_groups=num_groups,
                     time_emb_dim=time_emb_dim,
                     num_classes=num_classes,
                     use_attention=i in attn_resolutions,
+                    num_heads=num_heads,
                 ))
                 now_channels = out_channels
                 

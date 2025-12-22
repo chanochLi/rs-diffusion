@@ -134,7 +134,7 @@ class DDPM_UNetEngine(BaseEngine):
         
         return loss
     
-    def sample(
+    def sample( # type: ignore
         self,
         num_samples: int,
         img_shape: tuple = (3, 32, 32),

@@ -11,11 +11,11 @@ from torch.utils.data.distributed import DistributedSampler
 def init_distributed(
     backend: str = "nccl",
     init_method: str = "env://",
-    world_size: int = None,
-    rank: int = None
+    world_size: int | None = None,
+    rank: int | None = None
 ) -> tuple[int, int, bool]:
     """
-    Initialize distributed training.
+    初始化多卡训练
     
     Args:
         backend: Distributed backend ('nccl' for GPU, 'gloo' for CPU)
@@ -43,10 +43,8 @@ def init_distributed(
     # Set device for this process
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
-        device = torch.device(f'cuda:{local_rank}')
         backend = 'nccl'
     else:
-        device = torch.device('cpu')
         backend = 'gloo'
     
     # Initialize process group
@@ -83,8 +81,7 @@ def wrap_model(model: torch.nn.Module, device: torch.device, find_unused_paramet
     """
     if dist.is_initialized():
         model = model.to(device)
-        model = DDP(model, device_ids=[device.index] if device.type == 'cuda' else None,
-                   find_unused_parameters=find_unused_parameters)
+        model = DDP(model, device_ids=[device.index] if device.type == 'cuda' else None, find_unused_parameters=find_unused_parameters)
         return model
     return model
 

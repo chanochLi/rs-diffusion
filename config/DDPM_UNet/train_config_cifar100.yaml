@@ -61,7 +61,7 @@ process:
     tensorboard_dir: ./results/DDPM_UNet/cifar-100/tensorboard  # null to disable TensorBoard
     accumulation_steps: 1
     mixed_precision: null  # null, fp16, bf16
-    ema_decay: null  # null to disable, typically 0.999 or 0.9999
+    ema_decay: null  # null to disable
 
     # Optimizer parameters
     lr: 0.0001

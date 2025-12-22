@@ -4,24 +4,21 @@ Uses YAML config files to control all parameters.
 """
 import argparse
 import yaml
+import sys
+import os
+from pathlib import Path
+
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
-from pathlib import Path
-import sys
-import os
 
 from models import UNet
 from engine.DDPM_UNet import DDPM_UNetEngine
 from tools.train import TrainProcess
 from tools.val import ValProcess
 from tools.inference import InferenceProcess
-from tools.distributed import (
-    init_distributed, wrap_model,
-    is_main_process
-)
+from tools.distributed import init_distributed, wrap_model, is_main_process, get_distributed_sampler
 
 
 def collate_fn(batch):
@@ -64,6 +61,7 @@ def create_model(config: dict) -> torch.nn.Module:
             attn_resolutions=tuple(model_config.get('attn_resolutions', [])),
             num_groups=model_config.get('num_groups', 32),
             init_pad=model_config.get('init_pad', 0),
+            num_heads=model_config.get('num_heads', 1),
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -108,14 +106,12 @@ def create_data_loaders(config: dict) -> tuple[DataLoader | None, DataLoader | N
     Returns:
         Tuple of (train_loader, val_loader)
     """
-    from tools.distributed import get_distributed_sampler
     
     data_config = config.get('data', {})
     
     # Create transforms
     transform = transforms.Compose([
         transforms.ToTensor(),
-        # Add more transforms as needed
     ])
     
     train_loader = None
@@ -129,7 +125,7 @@ def create_data_loaders(config: dict) -> tuple[DataLoader | None, DataLoader | N
             transform=transform
         )
         
-        # Use DistributedSampler if distributed training is enabled
+        # DDP的sampler
         train_sampler = get_distributed_sampler(
             train_dataset,
             shuffle=train_config.get('shuffle', True)
@@ -156,7 +152,7 @@ def create_data_loaders(config: dict) -> tuple[DataLoader | None, DataLoader | N
             transform=transform
         )
         
-        # Use DistributedSampler for validation too
+        # DDP的sampler
         val_sampler = get_distributed_sampler(
             val_dataset,
             shuffle=False
@@ -186,14 +182,14 @@ def get_device(config: dict, distributed: bool = False) -> torch.device:
     Returns:
         torch.device
     """
-    # In distributed training, use local rank
+    # 多卡
     if distributed and 'LOCAL_RANK' in os.environ:
         local_rank = int(os.environ['LOCAL_RANK'])
         if torch.cuda.is_available():
             return torch.device(f'cuda:{local_rank}')
     
+    # 选择
     device_name = config.get('device', 'auto')
-    
     if device_name == 'auto':
         if torch.cuda.is_available():
             return torch.device('cuda')
@@ -207,19 +203,8 @@ def get_device(config: dict, distributed: bool = False) -> torch.device:
 
 def main():
     parser = argparse.ArgumentParser(description='Train, validate, or run inference on image generation models')
-    parser.add_argument(
-        '--config',
-        type=str,
-        required=True,
-        help='Path to YAML config file'
-    )
-    parser.add_argument(
-        '--mode',
-        type=str,
-        choices=['train', 'val', 'inference'],
-        required=True,
-        help='Mode to run: train, val, or inference'
-    )
+    parser.add_argument('--config', type=str, required=True, help='Path to YAML config file')
+    parser.add_argument('--mode', type=str, choices=['train', 'val', 'inference'], required=True, help='Mode to run: train, val, or inference')
     args = parser.parse_args()
     
     # Load config
@@ -231,9 +216,10 @@ def main():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
-    # Initialize distributed training if enabled
+    # 多卡
     rank, world_size, distributed = init_distributed()
     
+    # log
     if distributed:
         if is_main_process():
             print(f"Initialized distributed training: world_size={world_size}, rank={rank}")
@@ -246,32 +232,25 @@ def main():
         print(f"Using device: {device}")
     
     # Create model
-    if is_main_process():
-        print("Creating model...")
     model = create_model(config.get('model', {}))
     if is_main_process():
         print(f"Model created: {config.get('model', {}).get('type', 'DDPM_UNet')}")
     
-    # Wrap model with DDP if distributed
+    # 多卡使用DDP封装模型
     model = wrap_model(model, device, find_unused_parameters=config.get('distributed', {}).get('find_unused_parameters', False))
     
-    # Create engine
-    if is_main_process():
-        print("Creating engine...")
+    # 创建engine
     engine = create_engine(config.get('engine', {}), model, device)
     if is_main_process():
         print(f"Engine created: {config.get('engine', {}).get('type', 'DDPM_UNet')}")
     
-    # Run based on mode
+    # 不同模式
     if args.mode == 'train':
         if is_main_process():
             print("\n=== Starting Training ===")
         train_loader, val_loader = create_data_loaders(config)
         
-        if train_loader is None:
-            if is_main_process():
-                print("Error: Training data loader not found in config")
-            sys.exit(1)
+        assert train_loader is not None, "Training data loader not found in config"
         
         train_config = config.get('process', {}).get('train', {})
         train_process = TrainProcess(
@@ -302,21 +281,19 @@ def main():
         print("\n=== Starting Validation ===")
         _, val_loader = create_data_loaders(config)
         
-        if val_loader is None:
-            print("Error: Validation data loader not found in config")
-            sys.exit(1)
+        assert val_loader is not None, "Validation data loader not found in config"
         
         val_config = config.get('process', {}).get('val', {})
         val_process = ValProcess(
             engine=engine,
             val_loader=val_loader,
-            metrics=val_config.get('metrics', None),  # TODO: Implement metric loading
+            metrics=val_config.get('metrics', None),
             save_samples=val_config.get('save_samples', False),
             save_dir=val_config.get('save_dir', './val_results'),
             num_samples_to_save=val_config.get('num_samples_to_save', 10),
         )
         
-        # Load checkpoint if specified
+        # 加载模型
         checkpoint_path = val_config.get('checkpoint_path', None)
         if checkpoint_path:
             engine.load_checkpoint(checkpoint_path)
@@ -334,7 +311,7 @@ def main():
             save_dir=inference_config.get('save_dir', './inference_results'),
         )
         
-        # Prepare labels if provided
+        # 标签
         labels = inference_config.get('labels', None)
         if labels is not None:
             labels = torch.tensor(labels, device=device)

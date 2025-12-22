@@ -76,7 +76,8 @@ class TrainProcess(BaseProcess):
         if mixed_precision is not None and mixed_precision.lower() in ['fp16', 'bf16']:
             if mixed_precision.lower() == 'fp16':
                 self.amp_dtype = torch.float16
-                self.scaler = GradScaler()
+                if self.engine.device.type == 'cuda':
+                    self.scaler = GradScaler()
             elif mixed_precision.lower() == 'bf16':
                 self.amp_dtype = torch.bfloat16
         else:
@@ -268,7 +269,7 @@ class TrainProcess(BaseProcess):
         for step, batch in enumerate(pbar):
             batch = self._move_to_device(batch)
             
-            with autocast(dtype=self.amp_dtype):
+            with autocast(self.engine.device.type, dtype=self.amp_dtype):
                 outputs = self.engine.forward_step(batch)
                 loss = self.engine.compute_loss(outputs, batch)
                 # 将loss除以累积步数，以保持梯度尺度一致
@@ -362,7 +363,7 @@ class TrainProcess(BaseProcess):
             for batch in self.val_loader:
                 batch = self._move_to_device(batch)
                 # 统一使用autocast（验证时不需要梯度缩放）
-                with autocast(dtype=self.amp_dtype):
+                with autocast(self.engine.device.type, dtype=self.amp_dtype):
                     outputs = self.engine.forward_step(batch)
                     loss = self.engine.compute_loss(outputs, batch)
                 total_loss += loss.item()
