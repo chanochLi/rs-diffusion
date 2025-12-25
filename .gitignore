@@ -218,3 +218,6 @@ __marimo__/
 # custom folders
 data/
 results/
+
+# mac files
+.DS_Store
